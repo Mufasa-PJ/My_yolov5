@@ -63,7 +63,10 @@ def t2():
 3.训练的时候用模型训练中的终端训练方式训练。
 附加：模型训练：python train.py --data ./data/coco128-copy.yaml --epochs 3 --weights  ./study/yolov5s.pt --batch-size 8
 --workers 0 --name coco128 --device cpu
-    模型推理；python detect.py --weights yolov5s.pt --source 0    
+    模型推理；python detect.py --weights yolov5s.pt --source 0  
+     利用训练好的模型进行推理（作题看效果）：  python detect.py --weights ./runs/train/exp/weights/best.pt --source 0 
+     转为onnx文件（可以看到模型的结构）：python export.py --weights  ./runs/train/exp/weights/best.pt --include onnx --opset 12 --simplify
+     模型评估代码（相当于期末考评分）：python val.py --weights runs/train/coco128/weights/best.pt --data data/coco128-copy.yaml
 '''
 
 if __name__ == "__main__":
