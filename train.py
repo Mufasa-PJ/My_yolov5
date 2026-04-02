@@ -608,7 +608,7 @@ def parse_opt(known=False):
     parser.add_argument("--quad", action="store_true", help="quad dataloader")
     parser.add_argument("--cos-lr", action="store_true", help="cosine LR scheduler 学习率的变化方式")
     parser.add_argument("--label-smoothing", type=float, default=0.0, help="Label smoothing epsilon 标签平滑系数 不需要预测的特别正确，但是可以给一个概率的阈值之后就可以大致确定大概率属于那个类别，不一定非要很高")
-    parser.add_argument("--patience", type=int, default=100, help="EarlyStopping patience (epochs without improvement) 加dropout 防止模型过拟合，批归一化也可以 使模型适中，不要太深。限制能力：这个参数就是当模型训练到一定程度，提前停止模型的训练参数（间隔多少个批次，模型的效果没有提升就停止）") # 过拟合：训练数据集效果好，评估/验证集上效果不好
+    parser.add_argument("--patience", type=int, default=100, help="EarlyStopping patience (epochs without improvement) 加dropout 防止模型过拟合，批归一化也可以 使模型适中，不要太深。限制能力：这个参数就是当模型训练到一定程度，提前停止模型的训练参数（间隔多少个批次，模型的效果没有提升就停止）防止模型太自信，不用训练到百分之百") # 过拟合：训练数据集效果好，评估/验证集上效果不好
     parser.add_argument("--freeze", nargs="+", type=int, default=[0], help="Freeze layers: backbone=10, first3=0 1 2 冻结参数层：")
     parser.add_argument("--save-period", type=int, default=-1, help="Save checkpoint every x epochs (disabled if < 1) 持久化保存的时候间隔多少轮")
     parser.add_argument("--seed", type=int, default=0, help="Global training seed")
