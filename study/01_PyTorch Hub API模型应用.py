@@ -68,7 +68,9 @@ def t2():
      转为onnx文件（可以看到模型的结构）：python export.py --weights  ./runs/train/exp/weights/best.pt --include onnx --opset 12 --simplify
      模型评估代码（相当于期末考评分）：python val.py --weights runs/train/coco128/weights/best.pt --data data/coco128-copy.yaml
 '''
-
+'''
+数据集和模型都要放到和train.py同文件夹中
+'''
 if __name__ == "__main__":
     t2()
 

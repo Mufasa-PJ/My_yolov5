@@ -13,7 +13,9 @@ Models:     https://github.com/ultralytics/yolov5/tree/master/models
 Datasets:   https://github.com/ultralytics/yolov5/tree/master/data
 Tutorial:   https://docs.ultralytics.com/yolov5/tutorials/train_custom_data
 """
-
+'''
+30 - 551 模型的训练代码
+'''
 import argparse
 import math
 import os
@@ -158,19 +160,19 @@ def train(hyp, opt, device, callbacks):
     (w.parent if evolve else w).mkdir(parents=True, exist_ok=True)  # make dir
     last, best = w / "last.pt", w / "best.pt"
 
-    # Hyperparameters
+    # Hyperparameters 超参数获取 解析yaml文件
     if isinstance(hyp, str):
         with open(hyp, errors="ignore") as f:
             hyp = yaml.safe_load(f)  # load hyps dict
     LOGGER.info(colorstr("hyperparameters: ") + ", ".join(f"{k}={v}" for k, v in hyp.items()))
     opt.hyp = hyp.copy()  # for saving hyps to checkpoints
 
-    # Save run settings
+    # Save run settings 保存超参数以及运行参数 每次训练都
     if not evolve:
         yaml_save(save_dir / "hyp.yaml", hyp)
         yaml_save(save_dir / "opt.yaml", vars(opt))
 
-    # Loggers
+    # Loggers 日志相关文件
     data_dict = None
     if RANK in {-1, 0}:
         include_loggers = list(LOGGERS)
@@ -197,7 +199,7 @@ def train(hyp, opt, device, callbacks):
         if resume:  # If resuming runs from remote artifact
             weights, epochs, hyp, batch_size = opt.weights, opt.epochs, opt.hyp, opt.batch_size
 
-    # Config
+    # Config 。数据相关配置信息加载
     plots = not evolve and not opt.noplots  # create plots
     cuda = device.type != "cpu"
     init_seeds(opt.seed + 1 + RANK, deterministic=True)
@@ -208,10 +210,10 @@ def train(hyp, opt, device, callbacks):
     names = {0: "item"} if single_cls and len(data_dict["names"]) != 1 else data_dict["names"]  # class names
     is_coco = isinstance(val_path, str) and val_path.endswith("coco/val2017.txt")  # COCO dataset
 
-    # Model
+    # Model 模型创建以及参数恢复
     check_suffix(weights, ".pt")  # check weights
     pretrained = weights.endswith(".pt")
-    if pretrained:
+    if pretrained: # 创建一个模型，并使用给定参数进行模型参数初始化
         with torch_distributed_zero_first(LOCAL_RANK):
             weights = attempt_download(weights)  # download if not found locally
         ckpt = torch_load(weights, map_location="cpu")  # load checkpoint to CPU to avoid CUDA memory leak
@@ -221,11 +223,11 @@ def train(hyp, opt, device, callbacks):
         csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
         model.load_state_dict(csd, strict=False)  # load
         LOGGER.info(f"Transferred {len(csd)}/{len(model.state_dict())} items from {weights}")  # report
-    else:
+    else: # 完全创建一个随机的模型
         model = Model(cfg, ch=3, nc=nc, anchors=hyp.get("anchors")).to(device)  # create
-    amp = check_amp(model)  # check AMP
+    amp = check_amp(model)  # check AMP 。检查当前设备是否支持混合精度训练 32精度浮点和16位精度浮点混合
 
-    # Freeze
+    # Freeze 冻结模型参数
     freeze = [f"model.{x}." for x in (freeze if len(freeze) > 1 else range(freeze[0]))]  # layers to freeze
     for k, v in model.named_parameters():
         v.requires_grad = True  # train all layers
@@ -234,23 +236,24 @@ def train(hyp, opt, device, callbacks):
             LOGGER.info(f"freezing {k}")
             v.requires_grad = False
 
-    # Image size
+    # Image size 要求dataload返回数据中的图像尺度大小--> 必须整除32（5次两倍的下采样） 2**5
     gs = max(int(model.stride.max()), 32)  # grid size (max stride)
     imgsz = check_img_size(opt.imgsz, gs, floor=gs * 2)  # verify imgsz is gs-multiple
 
-    # Batch size
+    # Batch size  计算批次大小值
     if RANK == -1 and batch_size == -1:  # single-GPU only, estimate best batch size
         batch_size = check_train_batch_size(model, imgsz, amp)
         loggers.on_params_update({"batch_size": batch_size})
 
-    # Optimizer
+    # Optimizer 优化器的创建
     nbs = 64  # nominal batch size
     accumulate = max(round(nbs / batch_size), 1)  # accumulate loss before optimizing
     hyp["weight_decay"] *= batch_size * accumulate / nbs  # scale weight_decay
     optimizer = smart_optimizer(model, opt.optimizer, hyp["lr0"], hyp["momentum"], hyp["weight_decay"])
 
-    # Scheduler
+    # Scheduler 学习率更新器的创建
     if opt.cos_lr:
+        # 学习率变化时是一种cos曲线
         lf = one_cycle(1, hyp["lrf"], epochs)  # cosine 1->hyp['lrf']
     else:
 
@@ -260,17 +263,17 @@ def train(hyp, opt, device, callbacks):
 
     scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)  # plot_lr_scheduler(optimizer, scheduler, epochs)
 
-    # EMA
+    # EMA 模型参数平滑--为了模型训练的稳定性
     ema = ModelEMA(model) if RANK in {-1, 0} else None
 
-    # Resume
+    # Resume 参数恢复/状态恢复
     best_fitness, start_epoch = 0.0, 0
     if pretrained:
         if resume:
             best_fitness, start_epoch, epochs = smart_resume(ckpt, optimizer, ema, weights, epochs, resume)
         del ckpt, csd
 
-    # DP mode
+    # DP mode 分布式的DO训练模型转换
     if cuda and RANK == -1 and torch.cuda.device_count() > 1:
         LOGGER.warning(
             "WARNING ⚠️ DP not recommended, use torch.distributed.run for best DDP Multi-GPU results.\n"
@@ -278,19 +281,19 @@ def train(hyp, opt, device, callbacks):
         )
         model = torch.nn.DataParallel(model)
 
-    # SyncBatchNorm
+    # SyncBatchNorm 针对多GPU训练的时候：BN转换为SYNCBN
     if opt.sync_bn and cuda and RANK != -1:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
         LOGGER.info("Using SyncBatchNorm()")
 
-    # Trainloader
+    # Trainloader 训练数据加载
     train_loader, dataset = create_dataloader(
-        train_path,
-        imgsz,
-        batch_size // WORLD_SIZE,
-        gs,
+        train_path, # 图像所在文件夹 绝对路径
+        imgsz, # 图像返回大小
+        batch_size // WORLD_SIZE, # 批次大小
+        gs, # 网格的feature map的缩放系数
         single_cls,
-        hyp=hyp,
+        hyp=hyp, # 超参数
         augment=True,
         cache=None if opt.cache == "val" else opt.cache,
         rect=opt.rect,
@@ -308,6 +311,7 @@ def train(hyp, opt, device, callbacks):
 
     # Process 0
     if RANK in {-1, 0}:
+        # 验证数据集的加载
         val_loader = create_dataloader(
             val_path,
             imgsz,
@@ -324,17 +328,20 @@ def train(hyp, opt, device, callbacks):
         )[0]
 
         if not resume:
+            # resume = Flase
+            # noautoanchor的时候
             if not opt.noautoanchor:
+                # 自适应anchor的逻辑
                 check_anchors(dataset, model=model, thr=hyp["anchor_t"], imgsz=imgsz)  # run AutoAnchor
             model.half().float()  # pre-reduce anchor precision
 
         callbacks.run("on_pretrain_routine_end", labels, names)
 
-    # DDP mode
+    # DDP mode 。多GPU训练模型转换
     if cuda and RANK != -1:
         model = smart_DDP(model)
 
-    # Model attributes
+    # Model attributes 模型的结构
     nl = de_parallel(model).model[-1].nl  # number of detection layers (to scale hyps)
     hyp["box"] *= 3 / nl  # scale to layers
     hyp["cls"] *= nc / 80 * 3 / nl  # scale to classes and layers
@@ -345,7 +352,7 @@ def train(hyp, opt, device, callbacks):
     model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc  # attach class weights
     model.names = names
 
-    # Start training
+    # Start training  开始训练
     t0 = time.time()
     nb = len(train_loader)  # number of batches
     nw = max(round(hyp["warmup_epochs"] * nb), 100)  # number of warmup iterations, max(3 epochs, 100 iterations)
@@ -355,8 +362,8 @@ def train(hyp, opt, device, callbacks):
     results = (0, 0, 0, 0, 0, 0, 0)  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
     scheduler.last_epoch = start_epoch - 1  # do not move
     scaler = torch.cuda.amp.GradScaler(enabled=amp)
-    stopper, stop = EarlyStopping(patience=opt.patience), False
-    compute_loss = ComputeLoss(model)  # init loss class
+    stopper, stop = EarlyStopping(patience=opt.patience), False # 提前停止器 当模型训练的时候长时间没有提升（评估数据集上的）就要停止
+    compute_loss = ComputeLoss(model)  # init loss class  计算损失函数的对象
     callbacks.run("on_train_start")
     LOGGER.info(
         f"Image sizes {imgsz} train, {imgsz} val\n"
@@ -364,11 +371,12 @@ def train(hyp, opt, device, callbacks):
         f"Logging results to {colorstr('bold', save_dir)}\n"
         f"Starting training for {epochs} epochs..."
     )
+    # 开始迭代训练
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         callbacks.run("on_train_epoch_start")
         model.train()
 
-        # Update image weights (optional, single-GPU only)
+        # Update image weights (optional, single-GPU only) 针对运行过程中，基于效果进行模型加权
         if opt.image_weights:
             cw = model.class_weights.cpu().numpy() * (1 - maps) ** 2 / nc  # class weights
             iw = labels_to_image_weights(dataset.labels, nc=nc, class_weights=cw)  # image weights
@@ -391,7 +399,7 @@ def train(hyp, opt, device, callbacks):
             ni = i + nb * epoch  # number integrated batches (since train start)
             imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
 
-            # Warmup
+            # Warmup  学习率变化策略，一般用于迁移模型的时候 学习率通常先增加，在下降，前面上升的过程叫做warup，为了不要陷入局部最优
             if ni <= nw:
                 xi = [0, nw]  # x interp
                 # compute_loss.gr = np.interp(ni, xi, [0.0, 1.0])  # iou loss ratio (obj_loss = 1.0 or iou)
@@ -410,7 +418,7 @@ def train(hyp, opt, device, callbacks):
                     ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
                     imgs = nn.functional.interpolate(imgs, size=ns, mode="bilinear", align_corners=False)
 
-            # Forward
+            # Forward 前向过程
             with torch.cuda.amp.autocast(amp):
                 pred = model(imgs)  # forward
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
@@ -419,10 +427,12 @@ def train(hyp, opt, device, callbacks):
                 if opt.quad:
                     loss *= 4.0
 
-            # Backward
+            # Backward 反向传播，计算梯度
             scaler.scale(loss).backward()
 
             # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
+            # 反向传播，更新参数（可以采用不同样本数的样本损失梯度合并到一起进行参数更新） 批次大的时候更新慢，平缓，效果不好；批次小，更新快，有震荡
+            # 在刚开始的时候，适合做批次小更新快的。
             if ni - last_opt_step >= accumulate:
                 scaler.unscale_(optimizer)  # unscale gradients
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)  # clip gradients
@@ -446,12 +456,12 @@ def train(hyp, opt, device, callbacks):
                     return
             # end batch ------------------------------------------------------------------------------------------------
 
-        # Scheduler
+        # Scheduler 学习率的更新，每做一轮，学习率更新一次
         lr = [x["lr"] for x in optimizer.param_groups]  # for loggers
         scheduler.step()
 
         if RANK in {-1, 0}:
-            # mAP
+            # mAP 模型效果评估
             callbacks.run("on_train_epoch_end", epoch=epoch)
             ema.update_attr(model, include=["yaml", "nc", "hyp", "names", "stride", "class_weights"])
             final_epoch = (epoch + 1 == epochs) or stopper.possible_stop
@@ -565,19 +575,19 @@ def parse_opt(known=False):
         - Tutorial: https://docs.ultralytics.com/yolov5/tutorials/train_custom_data
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--weights", type=str, default=ROOT / "yolov5s.pt", help="initial weights path")
-    parser.add_argument("--cfg", type=str, default="", help="model.yaml path")
-    parser.add_argument("--data", type=str, default=ROOT / "data/coco128.yaml", help="dataset.yaml path")
-    parser.add_argument("--hyp", type=str, default=ROOT / "data/hyps/hyp.scratch-low.yaml", help="hyperparameters path")
-    parser.add_argument("--epochs", type=int, default=100, help="total training epochs")
-    parser.add_argument("--batch-size", type=int, default=16, help="total batch size for all GPUs, -1 for autobatch")
-    parser.add_argument("--imgsz", "--img", "--img-size", type=int, default=640, help="train, val image size (pixels)")
+    parser.add_argument("--weights", type=str, default=ROOT / "yolov5s.pt", help="initial weights path 给定模型参数初始化时候对应的文件路径：模型迁移，用别人训练好的参数，作为我模型的初始值")
+    parser.add_argument("--cfg", type=str, default="", help="model.yaml path 给定模型结构文件路径")
+    parser.add_argument("--data", type=str, default=ROOT / "data/coco128.yaml", help="dataset.yaml path 训练数据所在的配置文件")
+    parser.add_argument("--hyp", type=str, default=ROOT / "data/hyps/hyp.scratch-low.yaml 超参数相关配置文件", help="hyperparameters path")
+    parser.add_argument("--epochs", type=int, default=100, help="total training epochs 最大训练论数")
+    parser.add_argument("--batch-size", type=int, default=16, help="total batch size for all GPUs, -1 for autobatch 批次大小")
+    parser.add_argument("--imgsz", "--img", "--img-size", type=int, default=640, help="train, val image size (pixels) 训练模型的时候采用的图像尺度大小，也就是datasload返回的数据图像大小")
     parser.add_argument("--rect", action="store_true", help="rectangular training")
-    parser.add_argument("--resume", nargs="?", const=True, default=False, help="resume most recent training")
-    parser.add_argument("--nosave", action="store_true", help="only save final checkpoint")
+    parser.add_argument("--resume", nargs="?", const=True, default=False, help="resume most recent training 是否继续训练，如果设置为True 会基于上一次的训练状态继续训练，默认False")
+    parser.add_argument("--nosave", action="store_true", help="only save final checkpoint ")
     parser.add_argument("--noval", action="store_true", help="only validate final epoch")
-    parser.add_argument("--noautoanchor", action="store_true", help="disable AutoAnchor")
-    parser.add_argument("--noplots", action="store_true", help="save no plot files")
+    parser.add_argument("--noautoanchor", action="store_true", help="disable AutoAnchor ")
+    parser.add_argument("--noplots", action="store_true", help="save no plot files ")
     parser.add_argument("--evolve", type=int, nargs="?", const=300, help="evolve hyperparameters for x generations")
     parser.add_argument(
         "--evolve_population", type=str, default=ROOT / "data/hyps", help="location for loading population"
@@ -585,22 +595,22 @@ def parse_opt(known=False):
     parser.add_argument("--resume_evolve", type=str, default=None, help="resume evolve from last generation")
     parser.add_argument("--bucket", type=str, default="", help="gsutil bucket")
     parser.add_argument("--cache", type=str, nargs="?", const="ram", help="image --cache ram/disk")
-    parser.add_argument("--image-weights", action="store_true", help="use weighted image selection for training")
-    parser.add_argument("--device", default="", help="cuda device, i.e. 0 or 0,1,2,3 or cpu")
-    parser.add_argument("--multi-scale", action="store_true", help="vary img-size +/- 50%%")
-    parser.add_argument("--single-cls", action="store_true", help="train multi-class data as single-class")
-    parser.add_argument("--optimizer", type=str, choices=["SGD", "Adam", "AdamW"], default="SGD", help="optimizer")
-    parser.add_argument("--sync-bn", action="store_true", help="use SyncBatchNorm, only available in DDP mode")
-    parser.add_argument("--workers", type=int, default=8, help="max dataloader workers (per RANK in DDP mode)")
-    parser.add_argument("--project", default=ROOT / "runs/train", help="save to project/name")
-    parser.add_argument("--name", default="exp", help="save to project/name")
-    parser.add_argument("--exist-ok", action="store_true", help="existing project/name ok, do not increment")
+    parser.add_argument("--image-weights", action="store_true", help="use weighted image selection for training （设计到权重就是跟不平衡有关）是否支持训练过程中更改训练数据中每个类别的损失权重-->是否对数据过程中，基于训练效果对各个类别进行加权 针对效果不好的类别加权，更关注")
+    parser.add_argument("--device", default="CPU", help="cuda device, i.e. 0 or 0,1,2,3 or cpu 训练设备 0 1 2 3 指的是多GPU并行")
+    parser.add_argument("--multi-scale", action="store_true", help="vary img-size +/- 50%% 训练过程中是否支持多尺度的训练 如果给这个参数就会给多尺度的训练")
+    parser.add_argument("--single-cls", action="store_true", help="train multi-class data as single-class 是否将当前数据集当成大哥类别训练")
+    parser.add_argument("--optimizer", type=str, choices=["SGD", "Adam", "AdamW"], default="SGD", help="optimizer 优化器")
+    parser.add_argument("--sync-bn", action="store_true", help="use SyncBatchNorm, only available in DDP mode 当使用模型并行的时候阵地B N模块是否使用SYNC BN 多GPU训练的时候建议加上")
+    parser.add_argument("--workers", type=int, default=8, help="max dataloader workers (per RANK in DDP mode) 数据加载的线程🌲")
+    parser.add_argument("--project", default=ROOT / "runs/train", help="save to project/name 保存根文件夹")
+    parser.add_argument("--name", default="exp", help="save to project/name 当前运行名称")
+    parser.add_argument("--exist-ok", action="store_true", help="existing project/name ok, do not increment 当前运行根文件夹/名称，存在的时候是否允许 project && name")
     parser.add_argument("--quad", action="store_true", help="quad dataloader")
-    parser.add_argument("--cos-lr", action="store_true", help="cosine LR scheduler")
-    parser.add_argument("--label-smoothing", type=float, default=0.0, help="Label smoothing epsilon")
-    parser.add_argument("--patience", type=int, default=100, help="EarlyStopping patience (epochs without improvement)")
-    parser.add_argument("--freeze", nargs="+", type=int, default=[0], help="Freeze layers: backbone=10, first3=0 1 2")
-    parser.add_argument("--save-period", type=int, default=-1, help="Save checkpoint every x epochs (disabled if < 1)")
+    parser.add_argument("--cos-lr", action="store_true", help="cosine LR scheduler 学习率的变化方式")
+    parser.add_argument("--label-smoothing", type=float, default=0.0, help="Label smoothing epsilon 标签平滑系数 不需要预测的特别正确，但是可以给一个概率的阈值之后就可以大致确定大概率属于那个类别，不一定非要很高")
+    parser.add_argument("--patience", type=int, default=100, help="EarlyStopping patience (epochs without improvement) 加dropout 防止模型过拟合，批归一化也可以 使模型适中，不要太深。限制能力：这个参数就是当模型训练到一定程度，提前停止模型的训练参数（间隔多少个批次，模型的效果没有提升就停止）") # 过拟合：训练数据集效果好，评估/验证集上效果不好
+    parser.add_argument("--freeze", nargs="+", type=int, default=[0], help="Freeze layers: backbone=10, first3=0 1 2 冻结参数层：")
+    parser.add_argument("--save-period", type=int, default=-1, help="Save checkpoint every x epochs (disabled if < 1) 持久化保存的时候间隔多少轮")
     parser.add_argument("--seed", type=int, default=0, help="Global training seed")
     parser.add_argument("--local_rank", type=int, default=-1, help="Automatic DDP Multi-GPU argument, do not modify")
 
@@ -683,7 +693,7 @@ def main(opt, callbacks=Callbacks()):
             backend="nccl" if dist.is_nccl_available() else "gloo", timeout=timedelta(seconds=10800)
         )
 
-    # Train
+    # Train 正式进入训练的代码逻辑
     if not opt.evolve:
         train(opt.hyp, opt, device, callbacks)
 
