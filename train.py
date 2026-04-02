@@ -199,7 +199,7 @@ def train(hyp, opt, device, callbacks):
         if resume:  # If resuming runs from remote artifact
             weights, epochs, hyp, batch_size = opt.weights, opt.epochs, opt.hyp, opt.batch_size
 
-    # Config 。数据相关配置信息加载
+    # Config 数据相关配置信息加载
     plots = not evolve and not opt.noplots  # create plots
     cuda = device.type != "cpu"
     init_seeds(opt.seed + 1 + RANK, deterministic=True)
@@ -600,8 +600,8 @@ def parse_opt(known=False):
     parser.add_argument("--multi-scale", action="store_true", help="vary img-size +/- 50%% 训练过程中是否支持多尺度的训练 如果给这个参数就会给多尺度的训练")
     parser.add_argument("--single-cls", action="store_true", help="train multi-class data as single-class 是否将当前数据集当成大哥类别训练")
     parser.add_argument("--optimizer", type=str, choices=["SGD", "Adam", "AdamW"], default="SGD", help="optimizer 优化器")
-    parser.add_argument("--sync-bn", action="store_true", help="use SyncBatchNorm, only available in DDP mode 当使用模型并行的时候阵地B N模块是否使用SYNC BN 多GPU训练的时候建议加上")
-    parser.add_argument("--workers", type=int, default=8, help="max dataloader workers (per RANK in DDP mode) 数据加载的线程🌲")
+    parser.add_argument("--sync-bn", action="store_true", help="use SyncBatchNorm, only available in DDP mode 当使用模型并行的时候阵地BN模块是否使用SYNC BN 多GPU训练的时候建议加上")
+    parser.add_argument("--workers", type=int, default=8, help="max dataloader workers (per RANK in DDP mode) 数据加载的线程数目")
     parser.add_argument("--project", default=ROOT / "runs/train", help="save to project/name 保存根文件夹")
     parser.add_argument("--name", default="exp", help="save to project/name 当前运行名称")
     parser.add_argument("--exist-ok", action="store_true", help="existing project/name ok, do not increment 当前运行根文件夹/名称，存在的时候是否允许 project && name")
