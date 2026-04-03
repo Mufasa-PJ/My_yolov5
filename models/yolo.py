@@ -238,11 +238,12 @@ class DetectionModel(BaseModel):
         if anchors:
             LOGGER.info(f"Overriding model.yaml anchors with anchors={anchors}")
             self.yaml["anchors"] = round(anchors)  # override yaml value
-        self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])  # model, savelist
+            # 解析参数得到的层序号
+        self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])  # model, savelist # 真正的模型结构
         self.names = [str(i) for i in range(self.yaml["nc"])]  # default names
         self.inplace = self.yaml.get("inplace", True)
 
-        # Build strides, anchors
+        # Build strides, anchors # 计算得到在每个不同尺度上的achor box大小，
         m = self.model[-1]  # Detect()
         if isinstance(m, (Detect, Segment)):
 

@@ -217,13 +217,23 @@ def train(hyp, opt, device, callbacks):
         with torch_distributed_zero_first(LOCAL_RANK):
             weights = attempt_download(weights)  # download if not found locally
         ckpt = torch_load(weights, map_location="cpu")  # load checkpoint to CPU to avoid CUDA memory leak
-        model = Model(cfg or ckpt["model"].yaml, ch=3, nc=nc, anchors=hyp.get("anchors")).to(device)  # create
+        # 核心创建网络结构
+        model = Model(
+            cfg or ckpt["model"].yaml, # 模型结构信息--》 如果当前没有给定，那么直接使用迁移模型的结构信息
+            ch=3,# 通道数
+            nc=nc,  # 类别数目
+            anchors=hyp.get("anchors")).to(device)  # create 每一个锚点，每一个gridcell对应的anchor有多少个
+
+
+        # 模型参数初始化 参数用的是别人的模型
         exclude = ["anchor"] if (cfg or hyp.get("anchors")) and not resume else []  # exclude keys
         csd = ckpt["model"].float().state_dict()  # checkpoint state_dict as FP32
         csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
+        # 是否用别人的参数。模型的创建步骤都一样
         model.load_state_dict(csd, strict=False)  # load
         LOGGER.info(f"Transferred {len(csd)}/{len(model.state_dict())} items from {weights}")  # report
-    else: # 完全创建一个随机的模型
+    else:
+        # 完全创建一个随机的模型 同上
         model = Model(cfg, ch=3, nc=nc, anchors=hyp.get("anchors")).to(device)  # create
     amp = check_amp(model)  # check AMP 。检查当前设备是否支持混合精度训练 32精度浮点和16位精度浮点混合
 
