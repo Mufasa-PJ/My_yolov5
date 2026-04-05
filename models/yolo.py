@@ -48,6 +48,7 @@ from models.common import (
     GhostBottleneck,
     GhostConv,
     Proto,
+    MP,
 )
 from models.experimental import MixConv2d
 from utils.autoanchor import check_anchor_order
@@ -455,8 +456,15 @@ def parse_model(d, ch):
             c2 = ch[f] * args[0] ** 2
         elif m is Expand:
             c2 = ch[f] // args[0] ** 2
+        elif m is MP:
+            c1 = ch[f] # 获取当前模块的输入通道
+            c2 = c1 # 下采样操作不改变通道数目
+            n = 1 # 池化不重复
+            args = [c1, *args] # 这里的args 就是yaml在传入的时候的[]中的args参数
+            # 这里的所有都要看上面循环中取得每个yaml中的结构的参数，结构参数确定了什么，这里的循环确定的参数就是什么 其实就是反推，我需要确定一个参数也就是输出通道，但是输出通道c2等于输入通道c1 ,输出通道又等于上一层的输出也就是ch[f] 所以就确定了最终惨呼声
         else:
             c2 = ch[f]
+
 
         m_ = nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace("__main__.", "")  # module type

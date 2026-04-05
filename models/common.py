@@ -451,6 +451,30 @@ class Concat(nn.Module):
         return torch.cat(x, self.d)
 
 
+class MP(nn.Module):
+    def __init__(self, c1, n=1,  g=1, e=0.5):
+        """Initializes C3 module with options for channel count, bottleneck repetition, shortcut usage, group
+        convolutions, and expansion.
+        """
+        super().__init__()
+        c_ = int(max(c1 * e,8))  # hidden channels
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c_, c_, 3, 2)
+        self.cv3 = Conv(2 * c_, c1, 1,1)  # optional act=FReLU(c2)
+        self.pool = nn.MaxPool2d(2,2) # 池化规定卷积和和步长
+
+    def forward(self, x):
+        """Performs forward propagation using concatenated outputs from two convolutions and a Bottleneck sequence."""
+        z1 =self.cv2(self.cv1(x))
+        z2 = self.pool(self.cv1(x))
+        z3 = torch.cat((z1,z2),dim=1)
+        z4 = self.cv3(z3)
+
+        return z4
+
+
+
+
 class DetectMultiBackend(nn.Module):
     """YOLOv5 MultiBackend class for inference on various backends including PyTorch, ONNX, TensorRT, and more."""
 
