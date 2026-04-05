@@ -375,34 +375,42 @@ class ClassificationModel(BaseModel):
         """Creates a YOLOv5 classification model from a specified *.yaml configuration file."""
         self.model = None
 
-
+# 这里的D就是yaml的字典配置文件配置文件
 def parse_model(d, ch):
     """Parses a YOLOv5 model from a dict `d`, configuring layers based on input channels `ch` and model architecture."""
-    LOGGER.info(f"\n{'':>3}{'from':>18}{'n':>3}{'params':>10}  {'module':<40}{'arguments':<30}")
+    LOGGER.info(f"\n{'':>3}{'from':>18}{'n':>3}{'params':>10}  {'module':<40}{'arguments':<30}") # 输出日志
+    # 从yaml配置文件中取变量
+    # gw 和 ch_mul是用同一个缩放系数，只是用的场景不一样
     anchors, nc, gd, gw, act, ch_mul = (
-        d["anchors"],
-        d["nc"],
-        d["depth_multiple"],
-        d["width_multiple"],
-        d.get("activation"),
-        d.get("channel_multiple"),
+        d["anchors"], # 对应三种尺寸的特征图，anchors对应着9个不同的anchor，每个尺度分为3个anchor，小目标：10，13  16，30 。 33，23
+        d["nc"], # classes 类别数
+        d["depth_multiple"], # 控制模型深度的参数，也就是模型的层数 可以统一控制depth multiple=0.33 * 层数是3 也就成了1
+        d["width_multiple"], # 控制模型宽度，控制通道数，基础通道数 * width_multiple = 实际通道数
+        d.get("activation"), # 获取激活函数 silu sigmod
+        d.get("channel_multiple"), # 获取width_multiple ,可以统一管理width_multiple ,不用特指键名就可以获取，易维护
     )
     if act:
+        # 使用默认激活函数
         Conv.default_act = eval(act)  # redefine default activation, i.e. Conv.default_act = nn.SiLU()
         LOGGER.info(f"{colorstr('activation:')} {act}")  # print
     if not ch_mul:
         ch_mul = 8
-    na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors
-    no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)
+    # 三个先验框来自同一个尺度
+    na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors # 查看一个grid cell有几个先验框
+    no = na * (nc + 1 + 4)  # number of outputs = anchors * (classes + 5)
+    # 这里的nc是每个类别的置信度，1是是否有物体的置信度，4是预测的长宽高，所以一个先验框需要预测85个值，每个gridcell有3个先验框并且来自同一尺度，所以一个gridcell需预测的数一共有3 * （80 + 1 + 4）个。 no就是一个gridcell对应预测的数。
 
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
-    for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
+    # 这里就是一个网络结构[-1, 1, Conv, [64, 6, 2, 2]  一个网络结构的过
+    for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]) :  # from, number, module, args # 这里的backbone就是每一个骨干网络的值[-1, 1, Conv, [64, 6, 2, 2] 来循环 d["head"] 也是[-1, 1, Conv, [512, 1, 1]
+    # d["backbone"] + d["head"] 这里的这两个也就是把两个结构列表+起来形成一个新列表，25个元素，每个元素也是一个列表
+    # enumerate 中遍历的时候 i是索引，j是元素
         m = eval(m) if isinstance(m, str) else m  # eval strings
-        for j, a in enumerate(args):
+        for j, a in enumerate(args): # j是索引，a是元素，然后args = 【输出，卷积和，步长，填充】
             with contextlib.suppress(NameError):
-                args[j] = eval(a) if isinstance(a, str) else a  # eval strings
+                args[j] = eval(a) if isinstance(a, str) else a  # eval strings  重新赋值，防止args中有字符串，防止报错
 
-        n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain
+        n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain 得到当前模块的重复次数，这个就是depth_multiple参数的作用了，算出实际重复次数。
         if m in {
             Conv,
             GhostConv,
@@ -423,21 +431,22 @@ def parse_model(d, ch):
             DWConvTranspose2d,
             C3x,
         }:
-            c1, c2 = ch[f], args[0]
+            c1, c2 = ch[f], args[0] # 获取当前模块的输入通道，当前模块的输出通道 每一次遍历的时候ch通道都要增加，为了取上层通道
+            # 这里的通道数为什么当不是255也就是no的时候才输出，因为这里的no相当于模型最后输出的通道数，用来预测，当等于no的时候也就是最终预测的输出，所以呢当不是no的时候也就是特征提取通道数，所以需要进行通道数目缩放， * gw 并且还要是8的倍数才行，这个8的倍数是默认
             if c2 != no:  # if not output
-                c2 = make_divisible(c2 * gw, ch_mul)
+                c2 = make_divisible(c2 * gw, ch_mul) # 输出通道数目做缩放，要求整除8
 
-            args = [c1, c2, *args[1:]]
+            args = [c1, c2, *args[1:]] # *args[1:] 这个参数是将所有的列表中的数拆开 去除第一个输出通道数，[3,32,6,2,2]
             if m in {BottleneckCSP, C3, C3TR, C3Ghost, C3x}:
-                args.insert(2, n)  # number of repeats
-                n = 1
-        elif m is nn.BatchNorm2d:
-            args = [ch[f]]
+                args.insert(2, n)  # number of repeats 将重复次数n插入参数列表
+                n = 1 # 重制n = 1 为了后续代码，重制外部n为1，
+        elif m is nn.BatchNorm2d: # 批归一化就是：把一批数据的分布强行拉成均值为0，方差为1，标准差为1，再缩放+偏移，让模型更稳
+            args = [ch[f]] # batchnorm2d的批归一化 通道数是不变的，因为arg中输出通道数等于输入通道数，并且卷积和1 * 1 步长为1 填充0
         elif m is Concat:
-            c2 = sum(ch[x] for x in f)
+            c2 = sum(ch[x] for x in f) # 这里的f不止是-1 有可能是6 或者其他，因为要和前面的结构进行拼接，所以ch在每次增加输出通道数的时候也会记录之前的通道数，也就是6的通道数，所以这里拼接的时候是ch[x]
         # TODO: channel, gw, gd
         elif m in {Detect, Segment}:
-            args.append([ch[x] for x in f])
+            args.append([ch[x] for x in f]) # f = [-1]  x = -1 ch[x] 就是取上一层的最后通道数
             if isinstance(args[1], int):  # number of anchors
                 args[1] = [list(range(args[1] * 2))] * len(f)
             if m is Segment:
