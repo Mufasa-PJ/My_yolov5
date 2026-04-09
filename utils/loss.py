@@ -140,9 +140,17 @@ class ComputeLoss:
 
     def __call__(self, p, targets):  # predictions, targets
         """Performs forward pass, calculating class, box, and object loss for given predictions and targets."""
+        # class loss分类损失 --> 是否属于实际物体的损失
         lcls = torch.zeros(1, device=self.device)  # class loss
+        # box loss 回归损失  当前anchor box的CIOU损失
         lbox = torch.zeros(1, device=self.device)  # box loss
+        # 是否有物体的分类损失 所有anchor box 均计算，副样本对应的实际标签就是0，证样本对应的实际标签损失
         lobj = torch.zeros(1, device=self.device)  # object loss
+
+        # tcls ：对应的实际边框类别id
+        # tbox：边框回归损失相关信息
+        # indices 里面主要索引位置信息：img_idx，anchor——idx grid——y grid——x
+        # 核心代码
         tcls, tbox, indices, anchors = self.build_targets(p, targets)  # targets
 
         # Losses
@@ -155,6 +163,7 @@ class ComputeLoss:
                 pxy, pwh, _, pcls = pi[b, a, gj, gi].split((2, 2, 1, self.nc), 1)  # target-subset of predictions
 
                 # Regression
+                # 回归损失
                 pxy = pxy.sigmoid() * 2 - 0.5
                 pwh = (pwh.sigmoid() * 2) ** 2 * anchors[i]
                 pbox = torch.cat((pxy, pwh), 1)  # predicted box
@@ -162,6 +171,7 @@ class ComputeLoss:
                 lbox += (1.0 - iou).mean()  # iou loss
 
                 # Objectness
+                # 构建anchor box是否有物体的真实便签值（iou）
                 iou = iou.detach().clamp(0).type(tobj.dtype)
                 if self.sort_obj_iou:
                     j = iou.argsort()
@@ -171,11 +181,12 @@ class ComputeLoss:
                 tobj[b, a, gj, gi] = iou  # iou ratio
 
                 # Classification
+                # 物体分类损失
                 if self.nc > 1:  # cls loss (only if multiple classes)
                     t = torch.full_like(pcls, self.cn, device=self.device)  # targets
                     t[range(n), tcls[i]] = self.cp
                     lcls += self.BCEcls(pcls, t)  # BCE
-
+            # 分类损失，计算anchor box、是否有物体的损失
             obji = self.BCEobj(pi[..., 4], tobj)
             lobj += obji * self.balance[i]  # obj loss
             if self.autobalance:

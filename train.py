@@ -219,7 +219,7 @@ def train(hyp, opt, device, callbacks):
         ckpt = torch_load(weights, map_location="cpu")  # load checkpoint to CPU to avoid CUDA memory leak
         # 核心创建网络结构
         model = Model(
-            cfg or ckpt["model"].yaml, # 模型结构信息--》 如果当前没有给定，那么直接使用迁移模型的结构信息
+            cfg or ckpt["model"].yaml, # 模型结构信息--> 如果当前没有给定，那么直接使用迁移模型的结构信息
             ch=3,# 通道数
             nc=nc,  # 类别数目
             anchors=hyp.get("anchors")).to(device)  # create 每一个锚点，每一个gridcell对应的anchor有多少个
@@ -228,7 +228,8 @@ def train(hyp, opt, device, callbacks):
         # 模型参数初始化 参数用的是别人的模型
         exclude = ["anchor"] if (cfg or hyp.get("anchors")) and not resume else []  # exclude keys
         csd = ckpt["model"].float().state_dict()  # checkpoint state_dict as FP32
-        csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
+        csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect # 参数名称一样行状一样的拿过来
+        # yaml增加了某一层之后，后续的参数都不会恢复，但是我们可以指定恢复基层
         # 是否用别人的参数。模型的创建步骤都一样
         model.load_state_dict(csd, strict=False)  # load
         LOGGER.info(f"Transferred {len(csd)}/{len(model.state_dict())} items from {weights}")  # report
@@ -239,6 +240,7 @@ def train(hyp, opt, device, callbacks):
 
     # Freeze 冻结模型参数
     freeze = [f"model.{x}." for x in (freeze if len(freeze) > 1 else range(freeze[0]))]  # layers to freeze
+    # 冻结yaml前三层的参数
     for k, v in model.named_parameters():
         v.requires_grad = True  # train all layers
         # v.register_hook(lambda x: torch.nan_to_num(x))  # NaN to 0 (commented for erratic training results)
@@ -248,7 +250,7 @@ def train(hyp, opt, device, callbacks):
 
     # Image size 要求dataload返回数据中的图像尺度大小--> 必须整除32（5次两倍的下采样） 2**5
     gs = max(int(model.stride.max()), 32)  # grid size (max stride)
-    imgsz = check_img_size(opt.imgsz, gs, floor=gs * 2)  # verify imgsz is gs-multiple
+    imgsz = check_img_size(opt.imgsz, gs, floor=gs * 2)  # verify imgsz is gs-multiple  强制转换为整除32
 
     # Batch size  计算批次大小值
     if RANK == -1 and batch_size == -1:  # single-GPU only, estimate best batch size
@@ -258,7 +260,7 @@ def train(hyp, opt, device, callbacks):
     # Optimizer 优化器的创建
     nbs = 64  # nominal batch size
     accumulate = max(round(nbs / batch_size), 1)  # accumulate loss before optimizing
-    hyp["weight_decay"] *= batch_size * accumulate / nbs  # scale weight_decay
+    hyp["weight_decay"] *= batch_size * accumulate / nbs  # scale weight_decay # 惩罚项系数
     optimizer = smart_optimizer(model, opt.optimizer, hyp["lr0"], hyp["momentum"], hyp["weight_decay"])
 
     # Scheduler 学习率更新器的创建
@@ -341,7 +343,7 @@ def train(hyp, opt, device, callbacks):
             # resume = Flase
             # noautoanchor的时候
             if not opt.noautoanchor:
-                # 自适应anchor的逻辑
+                # 自适应anchor的逻辑 # 基于给定的dataset数据集，计算更加适合的先验框尺度信息
                 check_anchors(dataset, model=model, thr=hyp["anchor_t"], imgsz=imgsz)  # run AutoAnchor
             model.half().float()  # pre-reduce anchor precision
 
@@ -353,9 +355,9 @@ def train(hyp, opt, device, callbacks):
 
     # Model attributes 模型的结构
     nl = de_parallel(model).model[-1].nl  # number of detection layers (to scale hyps)
-    hyp["box"] *= 3 / nl  # scale to layers
-    hyp["cls"] *= nc / 80 * 3 / nl  # scale to classes and layers
-    hyp["obj"] *= (imgsz / 640) ** 2 * 3 / nl  # scale to image size and layers
+    hyp["box"] *= 3 / nl  # scale to layers 边框回归损失系数
+    hyp["cls"] *= nc / 80 * 3 / nl  # scale to classes and layers 判断具体类别的损失系数
+    hyp["obj"] *= (imgsz / 640) ** 2 * 3 / nl  # scale to image size and layers 判断是否有物体的损失系数
     hyp["label_smoothing"] = opt.label_smoothing
     model.nc = nc  # attach number of classes to model
     model.hyp = hyp  # attach hyperparameters to model
@@ -413,7 +415,7 @@ def train(hyp, opt, device, callbacks):
             if ni <= nw:
                 xi = [0, nw]  # x interp
                 # compute_loss.gr = np.interp(ni, xi, [0.0, 1.0])  # iou loss ratio (obj_loss = 1.0 or iou)
-                accumulate = max(1, np.interp(ni, xi, [1, nbs / batch_size]).round())
+                accumulate = max(1, np.interp(ni, xi, [1, nbs / batch_size]).round()) # 获取得到
                 for j, x in enumerate(optimizer.param_groups):
                     # bias lr falls from 0.1 to lr0, all other lrs rise from 0.0 to lr0
                     x["lr"] = np.interp(ni, xi, [hyp["warmup_bias_lr"] if j == 0 else 0.0, x["initial_lr"] * lf(epoch)])
@@ -430,7 +432,10 @@ def train(hyp, opt, device, callbacks):
 
             # Forward 前向过程
             with torch.cuda.amp.autocast(amp):
-                pred = model(imgs)  # forward
+                # prep list[tensor]的格式，包含的是每一层的前向预测结果
+                # 每一层的shape形状:[N,na,H,W,nc + 1 + 4]
+                # N个图像，na个预测框，H * W个gridcell. 每个预测框对应的预测值为：nc+ 1 + 4
+                pred = model(imgs)  # forward 前向执行结果 pred:
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode

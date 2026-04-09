@@ -763,8 +763,13 @@ class LoadImagesAndLabels(Dataset):
     #     #self.shuffled_vector = np.random.permutation(self.nF) if self.augment else np.arange(self.nF)
     #     return self
 
+    # 图片处理
     def __getitem__(self, index):
         """Fetches the dataset item at the given index, considering linear, shuffled, or weighted sampling."""
+        """
+        获取图片权重
+        """
+        # 做图像加权
         index = self.indices[index]  # linear, shuffled, or image_weights
 
         hyp = self.hyp

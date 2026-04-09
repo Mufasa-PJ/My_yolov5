@@ -34,23 +34,26 @@ def check_anchors(dataset, model, thr=4.0, imgsz=640):
 
     def metric(k):  # compute metric
         """Computes ratio metric, anchors above threshold, and best possible recall for YOLOv5 anchor evaluation."""
-        r = wh[:, None] / k[None]
+        r = wh[:, None] / k[None] # 真实边框和先验框wh的比值
         x = torch.min(r, 1 / r).min(2)[0]  # ratio metric
         best = x.max(1)[0]  # best_x
         aat = (x > 1 / thr).float().sum(1).mean()  # anchors above threshold
-        bpr = (best > 1 / thr).float().mean()  # best possible recall
+        bpr = (best > 1 / thr).float().mean()  # best possible recall 先验框在四分之一到四之间的比值的占比的多少，100个里面有多少个，如果有98个那么就合格
         return bpr, aat
 
     stride = m.stride.to(m.anchors.device).view(-1, 1, 1)  # model strides
     anchors = m.anchors.clone() * stride  # current anchors
+    # 计算当前anchor box先验框的评估值
     bpr, aat = metric(anchors.cpu().view(-1, 2))
     s = f"\n{PREFIX}{aat:.2f} anchors/target, {bpr:.3f} Best Possible Recall (BPR). "
     if bpr > 0.98:  # threshold to recompute
         LOGGER.info(f"{s}Current anchors are a good fit to dataset ✅")
     else:
         LOGGER.info(f"{s}Anchors are a poor fit to dataset ⚠️, attempting to improve...")
+        # 针对dataset中的真实边框进行聚类处理，得到最终的anchor box尺度信息
         na = m.anchors.numel() // 2  # number of anchors
         anchors = kmean_anchors(dataset, n=na, img_size=imgsz, thr=thr, gen=1000, verbose=False)
+        # 重新计算当前新的anchor box的评估指标 BPR
         new_bpr = metric(anchors)[0]
         if new_bpr > bpr:  # replace anchors
             anchors = torch.tensor(anchors, device=m.anchors.device).type_as(m.anchors)
